@@ -1,37 +1,52 @@
-import streamlit as st
-import pandas as pd
-import requests
 from io import BytesIO
 
-# flask --app api.py run --port=5000
-prediction_endpoint = "http://127.0.0.1:5000/predict"
+import pandas as pd
+import requests
+import streamlit as st
+
+PREDICTION_ENDPOINT = "http://127.0.0.1:5000/predict"
 
 st.title("Text Sentiment Predictor")
+st.caption("For bulk predictions, upload a CSV or TSV with a 'Sentence' or 'verified_reviews' column.")
 
-uploaded_file = st.file_uploader(
-    "Choose a CSV file for bulk prediction - Upload the file and click on Predict",
-    type="csv",
-)
+uploaded_file = st.file_uploader("Choose a CSV or TSV file", type=["csv", "tsv", "tab"])
+user_input = st.text_input("Enter text", "")
 
-# Text input for sentiment prediction
-user_input = st.text_input("Enter text and click on Predict", "")
-
-# Prediction on single sentence
 if st.button("Predict"):
-    if uploaded_file is not None:
-        file = {"file": uploaded_file}
-        response = requests.post(prediction_endpoint, files=file)
-        response_bytes = BytesIO(response.content)
-        response_df = pd.read_csv(response_bytes)
-
-        st.download_button(
-            label="Download Predictions",
-            data=response_bytes,
-            file_name="Predictions.csv",
-            key="result_download_button",
-        )
-
-    else:
-        response = requests.post(prediction_endpoint, data={"text": user_input})
-        response = response.json()
-        st.write(f"Predicted sentiment: {response['prediction']}")
+    try:
+        if uploaded_file is not None:
+            response = requests.post(
+                PREDICTION_ENDPOINT,
+                files={"file": (uploaded_file.name, uploaded_file.getvalue(), "text/csv")},
+                timeout=120,
+            )
+            if "application/json" in response.headers.get("Content-Type", ""):
+                st.error(response.json().get("error", "Prediction failed."))
+            else:
+                response.raise_for_status()
+                csv_bytes = response.content
+                result = pd.read_csv(BytesIO(csv_bytes))
+                st.dataframe(result, use_container_width=True)
+                st.download_button(
+                    label="Download predictions",
+                    data=csv_bytes,
+                    file_name="Predictions.csv",
+                    mime="text/csv",
+                )
+        elif user_input.strip():
+            response = requests.post(
+                PREDICTION_ENDPOINT,
+                data={"text": user_input.strip()},
+                timeout=30,
+            )
+            result = response.json()
+            if response.ok:
+                st.write(f"Predicted sentiment: {result['prediction']}")
+            else:
+                st.error(result.get("error", "Prediction failed."))
+        else:
+            st.warning("Enter text or upload a CSV file first.")
+    except requests.RequestException as exc:
+        st.error(f"Could not reach the prediction API: {exc}")
+    except (ValueError, KeyError) as exc:
+        st.error(f"Could not process the API response: {exc}")
